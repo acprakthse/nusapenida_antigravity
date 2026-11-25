@@ -1,7 +1,7 @@
 """
-Data parameter sistem kelistrikan isolated microgrid Nusa Penida.
-Sumber: Laporan Sistem Kelistrikan Nusa Penida (PLN IP UBP Bali / PIPS / PT Panca Bina / CSIRO).
-Semua komponen (PLTS, BESS, PLTD) terhubung AC-coupled pada bus 20 kV.
+System parameters for the Nusa Penida Isolated Microgrid.
+Source: Nusa Penida Power System Report (PLN IP UBP Bali / PIPS / PT Panca Bina / CSIRO).
+All components (Solar PV, BESS, Diesel Generators) are AC-coupled on the 20 kV bus.
 """
 
 from __future__ import annotations
@@ -14,23 +14,23 @@ import pandas as pd
 @dataclass(frozen=True)
 class DieselUnit:
     unit_id: str
-    owner: str          # "PLN_PIPS" atau "PANCA_BINA"
-    dmp_kw: float       # Daya Mampu Pasok (kW) sesuai Tabel 1 & Tabel 2
-    mode: str           # "LOAD_SHARE", "FIX", atau "OFFLINE"
-    fuel: str           # "MFO" atau "B50"
-    p_min_ratio: float  # Rasio beban minimum terhadap DMP saat ON
-    fix_ratio: float    # Setpoint beban untuk unit mode FIX (rasio terhadap DMP)
-    var_cost: float     # Bobot biaya variabel relatif (tie-breaker merit order)
-    startup_cost: float # Bobot biaya start-up relatif (mencegah cycling berlebih)
-    min_up_hr: float    # Minimum Up Time (jam)
-    min_down_hr: float  # Minimum Down Time (jam)
-    ramp_kw_per_s: float = 30.0  # Ramp rate PLTD ±30 kW/detik (Bab 9)
+    owner: str          # "PLN_PIPS" or "PANCA_BINA"
+    dmp_kw: float       # Net Dependable Capacity / DMP (kW) per Tables 1 & 2
+    mode: str           # "LOAD_SHARE", "FIX", or "OFFLINE"
+    fuel: str           # "MFO" or "B50"
+    p_min_ratio: float  # Minimum loading ratio relative to DMP when ON
+    fix_ratio: float    # Load setpoint ratio relative to DMP for FIX-mode units
+    var_cost: float     # Relative variable cost weight (merit-order tie-breaker)
+    startup_cost: float # Relative start-up cost weight (prevents excessive cycling)
+    min_up_hr: float    # Minimum Up Time (hours)
+    min_down_hr: float  # Minimum Down Time (hours)
+    ramp_kw_per_s: float = 30.0  # Diesel ramp rate ±30 kW/s (Chapter 9)
 
 
 # ---------------------------------------------------------------------------
-# Tabel 1: Unit PLTD milik PLN (dioperasikan PIPS) - 7 unit Hyundai 9H21/32
-# Data snapshot 30 Oktober 2026 pukul 06.00 WITA (Total DMP = 6.250 kW)
-# Catatan: tidak mencakup PS (pemakaian sendiri) 242 kW beban / 400 kW DMP
+# Table 1: PLN-owned Diesel Units (operated by PIPS) - 7 Hyundai 9H21/32 units
+# Snapshot data: 30 October 2026 at 06:00 WITA (Total DMP = 6,250 kW)
+# Note: excludes auxiliary (PS) load of 242 kW / 400 kW DMP
 # ---------------------------------------------------------------------------
 PLTD_PLN_UNITS: List[DieselUnit] = [
     DieselUnit("MDU#1", "PLN_PIPS", 1400.0, "FIX",        "MFO", 0.35, 0.70, 1.00, 50.0, 2.0, 1.0),
@@ -43,9 +43,9 @@ PLTD_PLN_UNITS: List[DieselUnit] = [
 ]
 
 # ---------------------------------------------------------------------------
-# Tabel 2: Unit PLTD sewa / IPP (PT Panca Bina, skema PJBTL) - 19 unit
-# Data snapshot 30 Oktober 2026 pukul 06.00 WITA (Total DMP = 10.433 kW)
-# Hanya 6 dari 19 unit punya kapabilitas load sharing (di snapshot: UNIT#2,3,8 aktif LS)
+# Table 2: Leased / IPP Diesel Units (PT Panca Bina, PJBTL scheme) - 19 units
+# Snapshot data: 30 October 2026 at 06:00 WITA (Total DMP = 10,433 kW)
+# Only 6 of 19 units support load sharing (snapshot active LS: UNIT#2, 3, 8)
 # ---------------------------------------------------------------------------
 PLTD_PANCA_UNITS: List[DieselUnit] = [
     DieselUnit("PB#1",  "PANCA_BINA",   0.0, "OFFLINE",    "B50", 0.40, 0.90, 1.15, 40.0, 2.0, 1.0),
@@ -73,36 +73,36 @@ ALL_PLTD_UNITS: List[DieselUnit] = PLTD_PLN_UNITS + PLTD_PANCA_UNITS
 
 
 # ---------------------------------------------------------------------------
-# Parameter PLTS Suana (Bab 5)
+# Suana Solar PV Parameters (Chapter 5)
 # ---------------------------------------------------------------------------
 PLTS_SUANA_PARAMS: Dict[str, float] = {
-    "dc_capacity_kwp": 4200.0,   # 4,2 MWp DC (7.778 x 540 Wp JA Solar)
-    "ac_capacity_kw":  3500.0,   # 3,5 MWac (18 x Huawei SUN2000-215KTL-H0)
-    "inverter_mva":    3.6,      # ~3,6 MVA
-    "bus_kv":          20.0,     # AC-coupled 20 kV (Step-Up 2 x 2.100 kVA 20/0.8 kV)
+    "dc_capacity_kwp": 4200.0,   # 4.2 MWp DC (7,778 x 540 Wp JA Solar)
+    "ac_capacity_kw":  3500.0,   # 3.5 MWac (18 x Huawei SUN2000-215KTL-H0)
+    "inverter_mva":    3.6,      # ~3.6 MVA
+    "bus_kv":          20.0,     # AC-coupled 20 kV (Step-Up 2 x 2,100 kVA 20/0.8 kV)
 }
 
 
 # ---------------------------------------------------------------------------
-# Parameter BESS Suana (Bab 6 & Bab 9)
-# Tersedia 2 skenario:
-#   - "full_3pcs": 3 PCS aktif (desain 3 MW / 3 MWh nominal, usable EoL 1,84 MWh)
-#   - "derated_2pcs": kondisi eksisting Nov 2026 (1 PCS offline -> 2 MW / 2,2 MWh)
+# Suana BESS Parameters (Chapters 6 & 9)
+# Available scenarios:
+#   - "full_3pcs": 3 active PCS (3 MW / 3 MWh nominal design, 1.84 MWh usable EoL)
+#   - "derated_2pcs": existing Nov 2026 condition (1 PCS offline -> 2 MW / 2.2 MWh)
 # ---------------------------------------------------------------------------
 BESS_SCENARIOS: Dict[str, Dict[str, float]] = {
     "full_3pcs": {
         "p_max_kw":          3000.0,  # 3 MW (3 x 1500 kVA ABB PS1000)
-        "e_nom_kwh":         3000.0,  # 3 MWh nominal (3,375 MWh DC nameplate)
-        "soc_min":           0.15,    # 15% batas bawah proteksi LFP
-        "soc_max":           0.95,    # 95% batas atas
-        "soc_init":          0.50,    # 50% SoC awal
-        "eta_ch":            0.94,    # Efisiensi charging AC->DC
-        "eta_dis":           0.94,    # Efisiensi discharging DC->AC (RTE ~88,4%)
-        "bridge_duration_hr": 10.0 / 60.0,  # 10 menit bridging untuk start/prelube genset
+        "e_nom_kwh":         3000.0,  # 3 MWh nominal (3.375 MWh DC nameplate)
+        "soc_min":           0.15,    # 15% LFP lower protection limit
+        "soc_max":           0.95,    # 95% upper limit
+        "soc_init":          0.50,    # 50% initial SoC
+        "eta_ch":            0.94,    # AC->DC charging efficiency
+        "eta_dis":           0.94,    # DC->AC discharging efficiency (RTE ~88.4%)
+        "bridge_duration_hr": 10.0 / 60.0,  # 10-min bridging for genset start/prelube
     },
     "full_eol": {
         "p_max_kw":          3000.0,
-        "e_nom_kwh":         1840.0,  # 1,84 MWh usable energy (End of Life)
+        "e_nom_kwh":         1840.0,  # 1.84 MWh usable energy (End of Life)
         "soc_min":           0.05,
         "soc_max":           0.95,
         "soc_init":          0.50,
@@ -111,8 +111,8 @@ BESS_SCENARIOS: Dict[str, Dict[str, float]] = {
         "bridge_duration_hr": 10.0 / 60.0,
     },
     "derated_2pcs": {
-        "p_max_kw":          2000.0,  # 2 MW (1 PCS offline 12 bulan per Nov 2026)
-        "e_nom_kwh":         2200.0,  # 2,2 MWh
+        "p_max_kw":          2000.0,  # 2 MW (1 PCS offline 12 months as of Nov 2026)
+        "e_nom_kwh":         2200.0,  # 2.2 MWh
         "soc_min":           0.15,
         "soc_max":           0.95,
         "soc_init":          0.50,
@@ -124,14 +124,14 @@ BESS_SCENARIOS: Dict[str, Dict[str, float]] = {
 
 
 # ---------------------------------------------------------------------------
-# Parameter Operasi Sistem Isolated (Bab 3 & Bab 9)
+# Isolated System Operating Parameters (Chapters 3 & 9)
 # ---------------------------------------------------------------------------
 SYSTEM_PARAMS: Dict[str, float] = {
     "bus_voltage_kv":       20.0,
-    "ps_load_kw":           242.0,  # Pemakaian sendiri PLTD PLN (set 0 jika sudah masuk load profile)
-    "min_spin_res_kw":      700.0,  # Prosedur resmi: minimum 700 kW cadangan putar loadshare
-    "cloud_ramp_factor":    0.685,  # ±2,4 MW / 3,5 MWac ≈ 68,5% output PV untuk proteksi cloud ramp
-    "min_diesel_res_kw":    0.0,    # Set > 0 jika tetap mensyaratkan lantai cadangan putar murni PLTD
+    "ps_load_kw":           242.0,  # PLN Diesel auxiliary load (set 0 if already in load profile)
+    "min_spin_res_kw":      700.0,  # Operating procedure: minimum 700 kW load-share spinning reserve
+    "cloud_ramp_factor":    0.685,  # ±2.4 MW / 3.5 MWac ≈ 68.5% PV output for cloud ramp protection
+    "min_diesel_res_kw":    0.0,    # Set > 0 to enforce a pure diesel spinning reserve floor
 }
 
 
@@ -142,30 +142,30 @@ def generate_sample_profiles(
     pv_peak_kw: float = 3500.0,
 ) -> pd.DataFrame:
     """
-    Membuat profil beban & generasi PLTS sintetis (resolusi 30 menit) yang
-    dikalibrasi ke karakteristik laporan Nusa Penida (April 2026):
-      - Beban puncak malam ~15,78 MW pukul 19:30 WITA
-      - Lembah dini hari ~9,2 MW pukul 03:30-04:30 WITA
-      - Beban siang hari ~11,5 - 12,8 MW
-      - PLTS Suana berproduksi 06:00 - 18:00, puncak 3,5 MWac sekitar 12:00 WITA.
+    Generate synthetic load & Solar PV generation profiles (30-min resolution)
+    calibrated to Nusa Penida report characteristics (April 2026):
+      - Evening peak load ~15.78 MW at 19:30 WITA
+      - Early morning valley ~9.2 MW at 03:30–04:30 WITA
+      - Daytime load ~11.5–12.8 MW
+      - Suana Solar PV generation 06:00–18:00, peaking at 3.5 MWac around 12:00 WITA.
     """
     steps_per_day = int(round(24.0 / dt_hours))
     rows = []
     for d in range(n_days):
         for s in range(steps_per_day):
             hour = s * dt_hours
-            # Pola beban harian Nusa Penida (pariwisata + domestik)
-            # Basis + puncak malam (19:30) + bahu siang (13:00) - lembah dini hari (04:00)
+            # Daily Nusa Penida load pattern (tourism + residential)
+            # Base + evening peak (19:30) + midday shoulder (13:00) - night valley (04:00)
             evening_peak = math.exp(-0.5 * ((hour - 19.5) / 2.4) ** 2)
             day_shoulder = math.exp(-0.5 * ((hour - 13.0) / 3.2) ** 2)
             night_valley = math.exp(-0.5 * ((hour - 4.0) / 2.2) ** 2)
             load_norm = 0.68 + 0.32 * evening_peak + 0.11 * day_shoulder - 0.12 * night_valley
             load_kw = round(peak_load_kw * load_norm / 1.00, 1)
 
-            # Pola generasi PLTS Suana (06:00 - 18:00 WITA)
+            # Suana Solar PV generation pattern (06:00 - 18:00 WITA)
             if 6.0 <= hour <= 18.0:
                 pv_raw = math.sin(math.pi * (hour - 6.0) / 12.0) ** 1.25
-                # Sedikit variasi awan siang pada pukul 13:30
+                # Slight midday cloud dip around 13:30
                 cloud_dip = 0.85 if abs(hour - 13.5) < 0.6 else 1.0
                 pv_kw = round(min(pv_peak_kw, pv_peak_kw * pv_raw * cloud_dip), 1)
             else:
@@ -187,14 +187,14 @@ def load_profiles_from_csv(
     pv_col: str = "pv_avail_kw",
 ) -> pd.DataFrame:
     """
-    Memuat data profil beban dan generasi PLTS dari file CSV pengguna.
-    Kolom wajib: `load_col` (kW) dan `pv_col` (kW).
+    Load user-provided load and Solar PV generation profiles from a CSV file.
+    Required columns: `load_col` (kW) and `pv_col` (kW).
     """
     df = pd.read_csv(csv_path)
     if load_col not in df.columns or pv_col not in df.columns:
         raise ValueError(
-            f"CSV harus memiliki kolom '{load_col}' dan '{pv_col}'. "
-            f"Kolom ditemukan: {list(df.columns)}"
+            f"CSV must contain columns '{load_col}' and '{pv_col}'. "
+            f"Found columns: {list(df.columns)}"
         )
     out = df[[load_col, pv_col]].copy()
     out.columns = ["load_kw", "pv_avail_kw"]
