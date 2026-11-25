@@ -348,6 +348,11 @@ def extract_results(model: pyo.ConcreteModel, profiles: pd.DataFrame) -> pd.Data
             "res_diesel_kw": r_diesel,
             "res_bess_kw": r_bess,
             "res_total_kw": r_diesel + r_bess,
+            "grid_price_usd_kwh": (
+                float(profiles["grid_price_usd_kwh"].iloc[t])
+                if "grid_price_usd_kwh" in profiles.columns
+                else 0.125
+            ),
         })
 
     return pd.DataFrame(rows)

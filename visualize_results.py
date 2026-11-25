@@ -1,21 +1,31 @@
 """
-Visualization of MILP optimization results for the Nusa Penida Isolated Microgrid (20 kV AC-Coupled).
-Generates a 4-panel dashboard:
+Visualization of MILP optimization & LCOE economic results for the
+Nusa Penida Isolated Microgrid (20 kV AC-Coupled).
+Generates a 5-panel dashboard:
   1. 20 kV Bus Power Dispatch (PLN Diesel, Panca Bina Diesel, Solar PV, BESS vs. Load)
   2. BESS Operation (Charge/Discharge Power & State of Charge %)
   3. Spinning Reserve (Diesel Spinning Reserve + BESS Bridging vs. System Requirement)
   4. Diesel Unit Commitment (Online Units: PLN/PIPS vs. Panca Bina)
+  5. Economics: Grid Electricity Import Price Profile vs. PV+BESS LCOE & Cost Difference
 """
 
 from __future__ import annotations
 import argparse
+import os
+from typing import Dict, Any
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.ticker as mticker
 
-from data_nusa_penida import SYSTEM_PARAMS
+from data_nusa_penida import SYSTEM_PARAMS, load_profiles_from_csv
+from economics import (
+    DEFAULT_ECONOMICS,
+    compute_lcoe_and_comparison,
+    load_economics_from_csv,
+    print_economic_summary,
+)
 
 
 # Modern, consistent color palette across all panels
@@ -32,6 +42,13 @@ COLORS = {
     "res_diesel": "#60A5FA",  # Sky blue (Diesel Spinning Reserve)
     "res_bess":   "#2DD4BF",  # Mint teal (BESS Bridging Reserve)
     "res_req":    "#DC2626",  # Crimson dashed (Reserve Requirement)
+    "grid_price": "#1D4ED8",  # Royal blue (Grid Import Price)
+    "lcoe_pv":    "#D97706",  # Amber (PV Only LCOE)
+    "lcoe_comb":  "#0F766E",  # Deep teal (PV + BESS LCOE)
+    "hybrid":     "#4F46E5",  # Indigo (Hybrid Blended Cost)
+    "diesel_only": "#B45309", # Burnt orange/brown (Diesel-Only PLTD Cost)
+    "savings":    "#15803D",  # Green (Positive savings)
+    "premium":    "#B91C1C",  # Red (Cost premium)
     "text":       "#1E293B",  # Dark slate text
     "muted":      "#475569",  # Muted slate text
     "spine":      "#94A3B8",  # Soft grey spine
@@ -64,6 +81,7 @@ def _place_panel_header(
     labels=None,
     ncol: int = 4,
     title_pad: float = 24.0,
+    show_legend: bool = True,
 ) -> None:
     """Place panel title and legend cleanly above the plot area with zero data overlap."""
     ax.set_title(
@@ -74,6 +92,8 @@ def _place_panel_header(
         color=COLORS["text"],
         pad=title_pad,
     )
+    if not show_legend:
+        return
     if handles is None or labels is None:
         handles, labels = ax.get_legend_handles_labels()
     ax.legend(
@@ -98,13 +118,17 @@ def plot_dispatch_dashboard(
     title: str = "Nusa Penida Isolated Microgrid MILP Optimization (AC-Coupled 20 kV)",
     save_path: str | None = "nusa_penida_dispatch.png",
     show: bool = True,
+    econ_summary: Dict[str, Any] | None = None,
 ) -> plt.Figure:
-    """Create a clean 4-panel dashboard visualization from the MILP dispatch DataFrame."""
+    """Create a clean 5-panel dashboard (dispatch + LCOE vs. grid import comparison)."""
     plt.rcParams.update({
         "font.family": "sans-serif",
         "font.sans-serif": ["Segoe UI", "DejaVu Sans", "Arial"],
         "axes.edgecolor": COLORS["spine"],
     })
+
+    if econ_summary is None:
+        econ_summary = compute_lcoe_and_comparison(df, dt_hours=dt_hours)
 
     t_hr = df["hour"].to_numpy(dtype=float)
     load_mw = df["load_kw"].to_numpy(dtype=float) / 1000.0
@@ -120,6 +144,11 @@ def plot_dispatch_dashboard(
     res_bess_mw = np.clip(df["res_bess_kw"].to_numpy(dtype=float), 0.0, None) / 1000.0
     units_panca = df["units_panca_on"].to_numpy(dtype=float)
     units_pln = df["units_pln_on"].to_numpy(dtype=float)
+
+    if "grid_price_usd_kwh" in df.columns:
+        grid_price = df["grid_price_usd_kwh"].to_numpy(dtype=float)
+    else:
+        grid_price = np.full_like(t_hr, econ_summary["grid_price_avg_usd_kwh"])
 
     res_req_mw = np.maximum(
         SYSTEM_PARAMS["min_spin_res_kw"] / 1000.0,
@@ -138,16 +167,27 @@ def plot_dispatch_dashboard(
     peak_hr = t_hr[peak_idx]
     soc_min, soc_max = bess_soc.min(), bess_soc.max()
 
-    fig = plt.figure(figsize=(14.5, 12.2), dpi=140, facecolor="#FFFFFF")
+    lcoe_pv = econ_summary["lcoe_pv_only_usd_kwh"]
+    lcoe_comb = econ_summary["lcoe_pv_bess_usd_kwh"]
+    grid_wtd = econ_summary["grid_price_load_weighted_usd_kwh"]
+    diesel_only = econ_summary["diesel_only_cost_usd_kwh"]
+    hybrid_blended = econ_summary["hybrid_blended_cost_usd_kwh"]
+    cost_diff = econ_summary["cost_diff_usd_kwh"]
+    cost_diff_pct = econ_summary["cost_diff_pct"]
+    annual_diff = econ_summary["annual_cost_diff_usd"]
+    hyb_sav_yr = econ_summary["hybrid_annual_savings_vs_diesel_usd"]
+    hyb_sav_pct = econ_summary["hybrid_savings_vs_diesel_pct"]
+
+    fig = plt.figure(figsize=(14.8, 15.0), dpi=140, facecolor="#FFFFFF")
     gs = gridspec.GridSpec(
-        4, 1,
-        height_ratios=[2.35, 1.35, 1.30, 1.10],
-        hspace=0.46,
+        5, 1,
+        height_ratios=[2.25, 1.30, 1.25, 1.05, 1.50],
+        hspace=0.48,
     )
 
     # Main header & KPI summary bar
     fig.text(
-        0.065, 0.975,
+        0.065, 0.978,
         title,
         fontsize=14,
         fontweight="bold",
@@ -156,18 +196,19 @@ def plot_dispatch_dashboard(
         va="top",
     )
     kpi_text = (
-        f"Total Load: {e_load:.1f} MWh (Peak {peak_mw:.2f} MW)   •   "
-        f"Solar PV: {e_pv_used:.2f}/{e_pv_avail:.2f} MWh ({pv_util:.1f}% util., {pv_share:.1f}% share)   •   "
-        f"Curtailment: {e_pv_curt:.3f} MWh   •   "
-        f"BESS SoC: {soc_min:.1f}%–{soc_max:.1f}%"
+        f"Load: {e_load:.1f} MWh (Peak {peak_mw:.2f} MW)   •   "
+        f"PV: {e_pv_used:.2f}/{e_pv_avail:.2f} MWh ({pv_util:.0f}% util.)   •   "
+        f"LCOE PV+BESS: ${lcoe_comb:.4f}/kWh vs. Grid: ${grid_wtd:.4f}/kWh vs. Diesel-Only: ${diesel_only:.4f}/kWh   •   "
+        f"Hybrid Saves ${hyb_sav_yr/1e6:.2f}M/yr vs. Diesel"
     )
     fig.text(
-        0.065, 0.944,
+        0.065, 0.952,
         kpi_text,
-        fontsize=9.2,
+        fontsize=9.0,
         color=COLORS["muted"],
         ha="left",
         va="top",
+        parse_math=False,
         bbox=dict(
             boxstyle="round,pad=0.42,rounding_size=0.35",
             facecolor=COLORS["bg_kpi"],
@@ -179,6 +220,8 @@ def plot_dispatch_dashboard(
     x_pad = dt_hours * 0.5
     x_min = t_hr[0] - x_pad
     x_max = t_hr[-1] + x_pad
+    x_ticks = np.arange(0, np.floor(t_hr[-1]) + 0.1, 2.0)
+    x_tick_labels = [f"{int(h % 24):02d}:00" for h in x_ticks]
 
     # -------------------------------------------------------------------------
     # Panel 1: 20 kV AC Bus Power Balance (Stacked Area)
@@ -248,7 +291,6 @@ def plot_dispatch_dashboard(
             zorder=4,
         )
 
-    # Peak load annotation
     peak_hh = int(peak_hr % 24)
     peak_mm = int(round((peak_hr % 1) * 60))
     ax1.scatter([peak_hr], [peak_mw], color=COLORS["load"], s=28, zorder=6)
@@ -301,7 +343,7 @@ def plot_dispatch_dashboard(
     ax2.set_ylabel("BESS Power (MW)", fontsize=9.5, fontweight="bold", color=COLORS["text"])
 
     ax2_soc = ax2.twinx()
-    ax2_soc.grid(False)  # Prevent duplicate horizontal gridlines with left axis
+    ax2_soc.grid(False)
     ax2_soc.spines["top"].set_visible(False)
     ax2_soc.spines["left"].set_visible(False)
     ax2_soc.spines["bottom"].set_visible(False)
@@ -394,7 +436,8 @@ def plot_dispatch_dashboard(
     ax4.set_ylim(0, u_max + 2.5)
     ax4.yaxis.set_major_locator(mticker.MaxNLocator(integer=True, nbins=5))
     ax4.set_ylabel("Units Online", fontsize=9.5, fontweight="bold", color=COLORS["text"])
-    ax4.set_xlabel("Time (WITA / UTC+8)", fontsize=9.5, fontweight="bold", color=COLORS["text"], labelpad=6)
+    ax4.set_xticks(x_ticks)
+    ax4.set_xticklabels(x_tick_labels)
     _place_panel_header(
         ax4,
         "4. Diesel Generator Unit Commitment",
@@ -402,12 +445,128 @@ def plot_dispatch_dashboard(
         title_pad=22.0,
     )
 
-    # Format X-axis ticks every 2 hours
-    x_ticks = np.arange(0, np.floor(t_hr[-1]) + 0.1, 2.0)
-    ax4.set_xticks(x_ticks)
-    ax4.set_xticklabels([f"{int(h % 24):02d}:00" for h in x_ticks])
+    # -------------------------------------------------------------------------
+    # Panel 5: Economic Analysis (5a: Price & Cost Benchmarks | 5b: Cost Spread)
+    # -------------------------------------------------------------------------
+    gs_econ = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=gs[4], width_ratios=[1.35, 1.15], wspace=0.20)
 
-    fig.subplots_adjust(top=0.850, bottom=0.055, left=0.065, right=0.935)
+    # Panel 5a: Grid Import Price Profile vs. Diesel-Only & PV+BESS LCOE
+    ax5a = fig.add_subplot(gs_econ[0])
+    _style_axis(ax5a, hide_x_labels=False)
+
+    ax5a.axhline(
+        diesel_only,
+        color=COLORS["diesel_only"], linewidth=2.0, linestyle="-.",
+        label=f"Diesel-Only (${diesel_only:.4f}/kWh)", zorder=4,
+    )
+    ax5a.step(
+        t_hr, grid_price, where="mid",
+        color=COLORS["grid_price"], linewidth=2.1,
+        label="Grid Import Price ($/kWh)", zorder=4,
+    )
+    ax5a.axhline(
+        lcoe_comb,
+        color=COLORS["lcoe_comb"], linewidth=2.0, linestyle="--",
+        label=f"PV+BESS LCOE (${lcoe_comb:.4f}/kWh)", zorder=5,
+    )
+    ax5a.axhline(
+        lcoe_pv,
+        color=COLORS["lcoe_pv"], linewidth=1.6, linestyle=":",
+        label=f"PV Only LCOE (${lcoe_pv:.4f}/kWh)", zorder=4,
+    )
+    ax5a.fill_between(
+        t_hr, lcoe_comb, grid_price,
+        where=(grid_price >= lcoe_comb),
+        step="mid", color=COLORS["savings"], alpha=0.13, zorder=2,
+    )
+    ax5a.fill_between(
+        t_hr, lcoe_comb, grid_price,
+        where=(grid_price < lcoe_comb),
+        step="mid", color=COLORS["premium"], alpha=0.12, zorder=2,
+    )
+
+    p5_max = max(grid_price.max(), diesel_only, lcoe_comb, lcoe_pv) * 1.22
+    ax5a.set_ylim(0.0, p5_max)
+    ax5a.set_xlim(x_min, x_max)
+    ax5a.set_xticks(x_ticks)
+    ax5a.set_xticklabels(x_tick_labels)
+    ax5a.set_ylabel("Cost / Price ($/kWh)", fontsize=9.5, fontweight="bold", color=COLORS["text"])
+    ax5a.set_xlabel("Time (WITA / UTC+8)", fontsize=9.5, fontweight="bold", color=COLORS["text"], labelpad=6)
+    _place_panel_header(
+        ax5a,
+        "5a. Grid Import Price vs. Diesel-Only & PV+BESS LCOE",
+        ncol=2,
+        title_pad=34.0,
+    )
+
+    # Panel 5b: LCOE vs. Grid Import vs. Hybrid vs. Diesel-Only Bar Chart
+    ax5b = fig.add_subplot(gs_econ[1])
+    _style_axis(ax5b, hide_x_labels=False)
+    ax5b.grid(axis="x", visible=False)
+
+    categories = [
+        "PV Only\nLCOE",
+        "PV+BESS\nLCOE",
+        "Grid\nImport",
+        "Hybrid\nBlended",
+        "Diesel\nOnly",
+    ]
+    values = [lcoe_pv, lcoe_comb, grid_wtd, hybrid_blended, diesel_only]
+    bar_colors = [
+        COLORS["lcoe_pv"],
+        COLORS["lcoe_comb"],
+        COLORS["grid_price"],
+        COLORS["hybrid"],
+        COLORS["diesel_only"],
+    ]
+
+    bars = ax5b.bar(categories, values, width=0.56, color=bar_colors, alpha=0.90, edgecolor="white", linewidth=0.6, zorder=3)
+    b_max = max(values) * 1.62
+    ax5b.set_ylim(0.0, b_max)
+    ax5b.set_ylabel("Cost ($/kWh)", fontsize=9.5, fontweight="bold", color=COLORS["text"])
+    ax5b.set_xlabel("Supply Option / Benchmark", fontsize=9.5, fontweight="bold", color=COLORS["text"], labelpad=6)
+    ax5b.tick_params(axis="x", labelsize=8.3)
+
+    for bar, val in zip(bars, values):
+        ax5b.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            val + b_max * 0.022,
+            f"${val:.4f}",
+            ha="center",
+            va="bottom",
+            fontsize=8.2,
+            fontweight="bold",
+            color=COLORS["text"],
+        )
+
+    # Dual cost-spread callout badge (vs. Grid & vs. Diesel-Only)
+    badge_color = COLORS["savings"] if hyb_sav_yr >= 0 else COLORS["premium"]
+    badge_bg = "#DCFCE7" if hyb_sav_yr >= 0 else "#FEE2E2"
+    diff_text = (
+        f"PV+BESS vs. Grid Import: ${cost_diff:+.4f}/kWh ({cost_diff_pct:+.1f}%)  |  ${annual_diff:+,.0f}/yr\n"
+        f"Hybrid vs. Diesel-Only:  ${(diesel_only - hybrid_blended):+.4f}/kWh ({hyb_sav_pct:+.1f}%)  |  ${hyb_sav_yr:+,.0f}/yr"
+    )
+    ax5b.text(
+        0.50, 0.97,
+        diff_text,
+        transform=ax5b.transAxes,
+        ha="center",
+        va="top",
+        fontsize=7.9,
+        fontweight="semibold",
+        color=badge_color,
+        parse_math=False,
+        bbox=dict(boxstyle="round,pad=0.34", facecolor=badge_bg, edgecolor=badge_color, linewidth=0.9, alpha=0.94),
+        zorder=6,
+    )
+    _place_panel_header(
+        ax5b,
+        "5b. Unit Cost Comparison (LCOE vs. Grid vs. Diesel-Only)",
+        title_pad=34.0,
+        show_legend=False,
+    )
+
+    fig.subplots_adjust(top=0.882, bottom=0.045, left=0.065, right=0.935)
 
     if save_path:
         fig.savefig(save_path, dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
@@ -419,15 +578,36 @@ def plot_dispatch_dashboard(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Visualize Nusa Penida Microgrid MILP dispatch results")
+    parser = argparse.ArgumentParser(description="Visualize Nusa Penida Microgrid MILP dispatch & LCOE results")
     parser.add_argument("--csv", type=str, default="dispatch_results.csv", help="CSV output file from run_simulation.py")
+    parser.add_argument("--profiles-csv", type=str, default="input_profiles.csv", help="Optional profiles CSV if grid_price_usd_kwh is missing from dispatch CSV")
+    parser.add_argument("--econ-csv", type=str, default="input_economics.csv", help="Optional PV + BESS CAPEX/OPEX CSV")
     parser.add_argument("--dt", type=float, default=0.5, help="Time resolution in hours (default: 0.5)")
     parser.add_argument("--out", type=str, default="nusa_penida_dispatch.png", help="Output PNG image path")
     parser.add_argument("--no-show", action="store_true", help="Save image only without opening plot window")
     args = parser.parse_args()
 
     df = pd.read_csv(args.csv)
-    plot_dispatch_dashboard(df, dt_hours=args.dt, save_path=args.out, show=not args.no_show)
+    if "grid_price_usd_kwh" not in df.columns and args.profiles_csv and os.path.exists(args.profiles_csv):
+        prof = load_profiles_from_csv(args.profiles_csv)
+        if len(prof) == len(df):
+            df["grid_price_usd_kwh"] = prof["grid_price_usd_kwh"].to_numpy()
+
+    if args.econ_csv and os.path.exists(args.econ_csv):
+        econ_params = load_economics_from_csv(args.econ_csv)
+    else:
+        econ_params = dict(DEFAULT_ECONOMICS)
+
+    econ_summary = compute_lcoe_and_comparison(df, dt_hours=args.dt, economics=econ_params)
+    print_economic_summary(econ_summary)
+
+    plot_dispatch_dashboard(
+        df,
+        dt_hours=args.dt,
+        save_path=args.out,
+        show=not args.no_show,
+        econ_summary=econ_summary,
+    )
 
 
 if __name__ == "__main__":

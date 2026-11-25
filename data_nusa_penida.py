@@ -142,12 +142,14 @@ def generate_sample_profiles(
     pv_peak_kw: float = 3500.0,
 ) -> pd.DataFrame:
     """
-    Generate synthetic load & Solar PV generation profiles (30-min resolution)
-    calibrated to Nusa Penida report characteristics (April 2026):
+    Generate synthetic load, Solar PV generation, and grid electricity price profiles
+    (30-min resolution) calibrated to Nusa Penida report characteristics (April 2026):
       - Evening peak load ~15.78 MW at 19:30 WITA
       - Early morning valley ~9.2 MW at 03:30–04:30 WITA
       - Daytime load ~11.5–12.8 MW
-      - Suana Solar PV generation 06:00–18:00, peaking at 3.5 MWac around 12:00 WITA.
+      - Suana Solar PV generation 06:00–18:00, peaking at 3.5 MWac around 12:00 WITA
+      - Time-of-Use (TOU) grid import tariff: $0.11/kWh off-peak, $0.13/kWh daytime,
+        $0.17/kWh evening peak (18:00–22:00 WITA).
     """
     steps_per_day = int(round(24.0 / dt_hours))
     rows = []
@@ -171,24 +173,47 @@ def generate_sample_profiles(
             else:
                 pv_kw = 0.0
 
+            # Sample Time-of-Use (TOU) grid electricity import price (USD/kWh)
+            if 18.0 <= hour < 22.0:
+                grid_price = 0.170  # Evening peak tariff
+            elif 8.0 <= hour < 18.0:
+                grid_price = 0.130  # Daytime shoulder tariff
+            else:
+                grid_price = 0.110  # Night off-peak tariff
+
             rows.append({
                 "t": d * steps_per_day + s,
                 "hour": hour,
                 "load_kw": load_kw,
                 "pv_avail_kw": pv_kw,
+                "grid_price_usd_kwh": grid_price,
             })
 
     return pd.DataFrame(rows)
+
+
+def export_sample_profiles_csv(
+    csv_path: str = "input_profiles.csv",
+    n_days: int = 1,
+    dt_hours: float = 0.5,
+) -> pd.DataFrame:
+    """Export a clean CSV template for load, PV generation, and electricity price profiles."""
+    df = generate_sample_profiles(n_days=n_days, dt_hours=dt_hours)
+    df[["hour", "load_kw", "pv_avail_kw", "grid_price_usd_kwh"]].to_csv(csv_path, index=False)
+    return df
 
 
 def load_profiles_from_csv(
     csv_path: str,
     load_col: str = "load_kw",
     pv_col: str = "pv_avail_kw",
+    price_col: str = "grid_price_usd_kwh",
+    default_grid_price: float = 0.125,
 ) -> pd.DataFrame:
     """
-    Load user-provided load and Solar PV generation profiles from a CSV file.
+    Load user-provided load, Solar PV generation, and electricity price profiles from a CSV file.
     Required columns: `load_col` (kW) and `pv_col` (kW).
+    Optional columns: `hour` (hours) and `price_col` (USD/kWh; defaults to `default_grid_price`).
     """
     df = pd.read_csv(csv_path)
     if load_col not in df.columns or pv_col not in df.columns:
@@ -196,7 +221,15 @@ def load_profiles_from_csv(
             f"CSV must contain columns '{load_col}' and '{pv_col}'. "
             f"Found columns: {list(df.columns)}"
         )
-    out = df[[load_col, pv_col]].copy()
-    out.columns = ["load_kw", "pv_avail_kw"]
-    out["t"] = range(len(out))
+    out = pd.DataFrame({
+        "t": range(len(df)),
+        "load_kw": df[load_col].astype(float),
+        "pv_avail_kw": df[pv_col].astype(float),
+    })
+    if "hour" in df.columns:
+        out["hour"] = df["hour"].astype(float)
+    if price_col in df.columns:
+        out["grid_price_usd_kwh"] = df[price_col].astype(float)
+    else:
+        out["grid_price_usd_kwh"] = float(default_grid_price)
     return out

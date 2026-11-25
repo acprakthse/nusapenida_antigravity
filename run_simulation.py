@@ -1,14 +1,29 @@
 """
-Main script to run MILP simulation & optimization for the Nusa Penida Isolated Microgrid.
-Supports CSV input for load & Solar PV profiles or report-calibrated synthetic profiles.
+Main script to run MILP simulation, optimization, and LCOE economic comparison
+for the Nusa Penida Isolated Microgrid.
+Supports CSV inputs for load, Solar PV generation, electricity price profiles,
+and PV + BESS CAPEX/OPEX parameters.
 """
 
 from __future__ import annotations
 import argparse
+import os
 import sys
+import pandas as pd
 import pyomo.environ as pyo
 
-from data_nusa_penida import generate_sample_profiles, load_profiles_from_csv
+from data_nusa_penida import (
+    export_sample_profiles_csv,
+    generate_sample_profiles,
+    load_profiles_from_csv,
+)
+from economics import (
+    DEFAULT_ECONOMICS,
+    compute_lcoe_and_comparison,
+    load_economics_from_csv,
+    print_economic_summary,
+    save_economics_template_csv,
+)
 from microgrid_milp import build_nusa_penida_milp, extract_results
 
 
@@ -30,8 +45,19 @@ def get_available_solver(preferred: str = "appsi_highs"):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Nusa Penida Isolated Microgrid MILP Optimization")
-    parser.add_argument("--csv", type=str, default=None, help="Path to CSV containing load_kw and pv_avail_kw columns")
+    parser = argparse.ArgumentParser(description="Nusa Penida Isolated Microgrid MILP Optimization & LCOE Analysis")
+    parser.add_argument(
+        "--csv",
+        type=str,
+        default=None,
+        help="Path to CSV containing load_kw, pv_avail_kw, and optional grid_price_usd_kwh columns",
+    )
+    parser.add_argument(
+        "--econ-csv",
+        type=str,
+        default="input_economics.csv",
+        help="Path to PV + BESS CAPEX/OPEX CSV (default: input_economics.csv if present)",
+    )
     parser.add_argument("--dt", type=float, default=0.5, help="Time resolution in hours (default: 0.5 = 30 min)")
     parser.add_argument(
         "--bess",
@@ -42,18 +68,42 @@ def main():
     )
     parser.add_argument("--solver", type=str, default="appsi_highs", help="Pyomo MILP solver name")
     parser.add_argument("--out", type=str, default="dispatch_results.csv", help="Output CSV path for dispatch results")
+    parser.add_argument("--econ-out", type=str, default="economic_summary.csv", help="Output CSV path for LCOE summary")
     parser.add_argument("--include-ps", action="store_true", help="Add 242 kW auxiliary (PS) load to load profile")
     parser.add_argument("--no-bess-reserve", action="store_true", help="Disable BESS spinning reserve contribution")
     parser.add_argument("--plot", action="store_true", help="Generate PNG dashboard chart after optimization")
     parser.add_argument("--plot-out", type=str, default="nusa_penida_dispatch.png", help="Output PNG path when --plot is enabled")
+    parser.add_argument(
+        "--export-templates",
+        action="store_true",
+        help="Export ready-to-edit CSV templates (input_profiles.csv and input_economics.csv) and exit",
+    )
     args = parser.parse_args()
+
+    if args.export_templates:
+        export_sample_profiles_csv("input_profiles.csv", n_days=1, dt_hours=args.dt)
+        save_economics_template_csv("input_economics.csv")
+        print("Exported CSV input templates:")
+        print("  - input_profiles.csv  (columns: hour, load_kw, pv_avail_kw, grid_price_usd_kwh)")
+        print("  - input_economics.csv (PV & BESS CAPEX/OPEX and financial parameters)")
+        return
 
     if args.csv:
         profiles = load_profiles_from_csv(args.csv)
         print(f"Loaded profile data from: {args.csv} ({len(profiles)} timesteps)")
+    elif os.path.exists("input_profiles.csv"):
+        profiles = load_profiles_from_csv("input_profiles.csv")
+        print(f"Loaded profile data from: input_profiles.csv ({len(profiles)} timesteps)")
     else:
         profiles = generate_sample_profiles(n_days=1, dt_hours=args.dt)
         print(f"Using calibrated Nusa Penida synthetic profiles ({len(profiles)} timesteps, dt={args.dt} h)")
+
+    if args.econ_csv and os.path.exists(args.econ_csv):
+        econ_params = load_economics_from_csv(args.econ_csv)
+        print(f"Loaded economic parameters from: {args.econ_csv}")
+    else:
+        econ_params = dict(DEFAULT_ECONOMICS)
+        print("Using built-in default PV + BESS CAPEX/OPEX parameters")
 
     model = build_nusa_penida_milp(
         profiles=profiles,
@@ -112,6 +162,14 @@ def main():
     print(f"Dispatch results saved to  : {args.out}")
     print("======================================================")
 
+    econ_summary = compute_lcoe_and_comparison(df_res, dt_hours=dt, economics=econ_params)
+    print_economic_summary(econ_summary)
+
+    pd.DataFrame([econ_summary]).T.reset_index().rename(
+        columns={"index": "metric", 0: "value"}
+    ).to_csv(args.econ_out, index=False)
+    print(f"Economic summary saved to  : {args.econ_out}")
+
     if args.plot:
         from visualize_results import plot_dispatch_dashboard
         plot_dispatch_dashboard(
@@ -120,6 +178,7 @@ def main():
             title=f"Nusa Penida Isolated Microgrid MILP Optimization (BESS: {args.bess})",
             save_path=args.plot_out,
             show=False,
+            econ_summary=econ_summary,
         )
 
 
