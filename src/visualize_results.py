@@ -12,6 +12,8 @@ Generates a 5-panel dashboard:
 from __future__ import annotations
 import argparse
 import os
+import sys
+from pathlib import Path
 from typing import Dict, Any
 import numpy as np
 import pandas as pd
@@ -19,8 +21,13 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.ticker as mticker
 
-from data_nusa_penida import SYSTEM_PARAMS, load_profiles_from_csv
-from economics import (
+# Ensure project root is on sys.path when invoked directly (python src/visualize_results.py)
+_ROOT_DIR = str(Path(__file__).resolve().parent.parent)
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
+
+from src.data_nusa_penida import SYSTEM_PARAMS, load_profiles_from_csv
+from src.economics import (
     DEFAULT_ECONOMICS,
     compute_lcoe_and_comparison,
     load_economics_from_csv,
@@ -116,7 +123,7 @@ def plot_dispatch_dashboard(
     df: pd.DataFrame,
     dt_hours: float = 0.5,
     title: str = "Nusa Penida Isolated Microgrid MILP Optimization (AC-Coupled 20 kV)",
-    save_path: str | None = "nusa_penida_dispatch.png",
+    save_path: str | None = "output/nusa_penida_dispatch.png",
     show: bool = True,
     econ_summary: Dict[str, Any] | None = None,
 ) -> plt.Figure:
@@ -569,6 +576,9 @@ def plot_dispatch_dashboard(
     fig.subplots_adjust(top=0.882, bottom=0.045, left=0.065, right=0.935)
 
     if save_path:
+        parent = os.path.dirname(save_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         fig.savefig(save_path, dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
         print(f"Chart saved to: {save_path}")
     if show:
@@ -579,11 +589,11 @@ def plot_dispatch_dashboard(
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize Nusa Penida Microgrid MILP dispatch & LCOE results")
-    parser.add_argument("--csv", type=str, default="dispatch_results.csv", help="CSV output file from run_simulation.py")
-    parser.add_argument("--profiles-csv", type=str, default="input_profiles.csv", help="Optional profiles CSV if grid_price_usd_kwh is missing from dispatch CSV")
-    parser.add_argument("--econ-csv", type=str, default="input_economics.csv", help="Optional PV + BESS CAPEX/OPEX CSV")
+    parser.add_argument("--csv", type=str, default="output/dispatch_results.csv", help="CSV output file from run_simulation.py")
+    parser.add_argument("--profiles-csv", type=str, default="input/input_profiles.csv", help="Optional profiles CSV if grid_price_usd_kwh is missing from dispatch CSV")
+    parser.add_argument("--econ-csv", type=str, default="input/input_economics.csv", help="Optional PV + BESS CAPEX/OPEX CSV")
     parser.add_argument("--dt", type=float, default=0.5, help="Time resolution in hours (default: 0.5)")
-    parser.add_argument("--out", type=str, default="nusa_penida_dispatch.png", help="Output PNG image path")
+    parser.add_argument("--out", type=str, default="output/nusa_penida_dispatch.png", help="Output PNG image path")
     parser.add_argument("--no-show", action="store_true", help="Save image only without opening plot window")
     args = parser.parse_args()
 

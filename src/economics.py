@@ -8,6 +8,7 @@ and compares PV+BESS against both:
 
 from __future__ import annotations
 from typing import Dict, Any
+import os
 import numpy as np
 import pandas as pd
 
@@ -45,8 +46,14 @@ ECONOMICS_METADATA = [
 ]
 
 
-def save_economics_template_csv(csv_path: str = "input_economics.csv", params: Dict[str, float] | None = None) -> None:
+def save_economics_template_csv(
+    csv_path: str = "input/input_economics.csv",
+    params: Dict[str, float] | None = None,
+) -> None:
     """Save a clean, editable CAPEX/OPEX & Diesel cost economics template CSV."""
+    parent = os.path.dirname(csv_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     cfg = dict(DEFAULT_ECONOMICS)
     if params:
         cfg.update(params)

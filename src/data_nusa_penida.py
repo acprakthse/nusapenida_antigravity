@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
 import math
+import os
 import pandas as pd
 
 
@@ -193,11 +194,14 @@ def generate_sample_profiles(
 
 
 def export_sample_profiles_csv(
-    csv_path: str = "input_profiles.csv",
+    csv_path: str = "input/input_profiles.csv",
     n_days: int = 1,
     dt_hours: float = 0.5,
 ) -> pd.DataFrame:
     """Export a clean CSV template for load, PV generation, and electricity price profiles."""
+    parent = os.path.dirname(csv_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     df = generate_sample_profiles(n_days=n_days, dt_hours=dt_hours)
     df[["hour", "load_kw", "pv_avail_kw", "grid_price_usd_kwh"]].to_csv(csv_path, index=False)
     return df

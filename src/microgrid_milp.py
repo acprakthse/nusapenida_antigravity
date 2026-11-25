@@ -17,7 +17,7 @@ import math
 import pandas as pd
 import pyomo.environ as pyo
 
-from data_nusa_penida import (
+from src.data_nusa_penida import (
     ALL_PLTD_UNITS,
     BESS_SCENARIOS,
     PLTS_SUANA_PARAMS,
