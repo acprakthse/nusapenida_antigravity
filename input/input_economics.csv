@@ -6,8 +6,6 @@ bess_power_kw,2000.0,kW,BESS inverter power capacity
 bess_energy_kwh,2200.0,kWh,BESS nominal energy capacity
 bess_capex_usd_per_kwh,320.0,USD/kWh,BESS capital expenditure (CAPEX)
 bess_opex_usd_per_kwh_yr,8.0,USD/kWh-yr,BESS annual O&M cost (OPEX)
-diesel_pln_gen_cost_usd_kwh,0.185,USD/kWh,PLN Diesel (MFO) generation cost (fuel + O&M)
-diesel_panca_gen_cost_usd_kwh,0.215,USD/kWh,Leased Diesel (Panca Bina B50) generation cost (fuel + lease + O&M)
 discount_rate,0.08,fraction,Discount rate / WACC (e.g. 0.08 = 8%)
 project_lifetime_yr,20.0,years,Project economic lifetime
 bess_replacement_yr,10.0,years,BESS replacement year (0 to disable)

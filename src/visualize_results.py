@@ -153,9 +153,9 @@ def plot_dispatch_dashboard(
     units_pln = df["units_pln_on"].to_numpy(dtype=float)
 
     if "grid_price_usd_kwh" in df.columns:
-        grid_price = df["grid_price_usd_kwh"].to_numpy(dtype=float)
+        diesel_bpp_series = df["grid_price_usd_kwh"].to_numpy(dtype=float)
     else:
-        grid_price = np.full_like(t_hr, econ_summary["grid_price_avg_usd_kwh"])
+        diesel_bpp_series = np.full_like(t_hr, econ_summary["diesel_bpp_avg_usd_kwh"])
 
     res_req_mw = np.maximum(
         SYSTEM_PARAMS["min_spin_res_kw"] / 1000.0,
@@ -176,12 +176,11 @@ def plot_dispatch_dashboard(
 
     lcoe_pv = econ_summary["lcoe_pv_only_usd_kwh"]
     lcoe_comb = econ_summary["lcoe_pv_bess_usd_kwh"]
-    grid_wtd = econ_summary["grid_price_load_weighted_usd_kwh"]
-    diesel_only = econ_summary["diesel_only_cost_usd_kwh"]
+    diesel_bpp = econ_summary["diesel_bpp_load_weighted_usd_kwh"]
     hybrid_blended = econ_summary["hybrid_blended_cost_usd_kwh"]
-    cost_diff = econ_summary["cost_diff_usd_kwh"]
-    cost_diff_pct = econ_summary["cost_diff_pct"]
-    annual_diff = econ_summary["annual_cost_diff_usd"]
+    unit_diff = econ_summary["cost_diff_vs_bpp_usd_kwh"]
+    unit_diff_pct = econ_summary["cost_diff_vs_bpp_pct"]
+    hyb_sav_kwh = econ_summary["hybrid_savings_vs_diesel_usd_kwh"]
     hyb_sav_yr = econ_summary["hybrid_annual_savings_vs_diesel_usd"]
     hyb_sav_pct = econ_summary["hybrid_savings_vs_diesel_pct"]
 
@@ -204,9 +203,9 @@ def plot_dispatch_dashboard(
     )
     kpi_text = (
         f"Load: {e_load:.1f} MWh (Peak {peak_mw:.2f} MW)   •   "
-        f"PV: {e_pv_used:.2f}/{e_pv_avail:.2f} MWh ({pv_util:.0f}% util.)   •   "
-        f"LCOE PV+BESS: ${lcoe_comb:.4f}/kWh vs. Grid: ${grid_wtd:.4f}/kWh vs. Diesel-Only: ${diesel_only:.4f}/kWh   •   "
-        f"Hybrid Saves ${hyb_sav_yr/1e6:.2f}M/yr vs. Diesel"
+        f"PV: {e_pv_used:.2f}/{e_pv_avail:.2f} MWh ({pv_util:.0f}% util., {pv_share:.1f}% share)   •   "
+        f"PV+BESS LCOE: ${lcoe_comb:.4f}/kWh vs. Diesel BPP: ${diesel_bpp:.4f}/kWh   •   "
+        f"Hybrid Saves ${hyb_sav_yr/1e6:.2f}M/yr ({hyb_sav_pct:+.1f}%)"
     )
     fig.text(
         0.065, 0.952,
@@ -227,8 +226,23 @@ def plot_dispatch_dashboard(
     x_pad = dt_hours * 0.5
     x_min = t_hr[0] - x_pad
     x_max = t_hr[-1] + x_pad
-    x_ticks = np.arange(0, np.floor(t_hr[-1]) + 0.1, 2.0)
-    x_tick_labels = [f"{int(h % 24):02d}:00" for h in x_ticks]
+    total_span_hr = float(t_hr[-1] - t_hr[0] + dt_hours)
+    if total_span_hr <= 28.0:
+        tick_step = 2.0
+        x_ticks = np.arange(0, np.floor(t_hr[-1]) + 0.1, tick_step)
+        x_tick_labels = [f"{int(h % 24):02d}:00" for h in x_ticks]
+    elif total_span_hr <= 76.0:
+        tick_step = 6.0
+        x_ticks = np.arange(0, np.floor(t_hr[-1]) + 0.1, tick_step)
+        x_tick_labels = [f"D{int(h // 24) + 1} {int(h % 24):02d}:00" for h in x_ticks]
+    elif total_span_hr <= 192.0:
+        tick_step = 12.0
+        x_ticks = np.arange(0, np.floor(t_hr[-1]) + 0.1, tick_step)
+        x_tick_labels = [f"D{int(h // 24) + 1} {int(h % 24):02d}:00" for h in x_ticks]
+    else:
+        tick_step = max(24.0, round(total_span_hr / 10.0 / 24.0) * 24.0)
+        x_ticks = np.arange(0, np.floor(t_hr[-1]) + 0.1, tick_step)
+        x_tick_labels = [f"Day {int(h // 24) + 1}" for h in x_ticks]
 
     # -------------------------------------------------------------------------
     # Panel 1: 20 kV AC Bus Power Balance (Stacked Area)
@@ -300,11 +314,17 @@ def plot_dispatch_dashboard(
 
     peak_hh = int(peak_hr % 24)
     peak_mm = int(round((peak_hr % 1) * 60))
+    peak_time_lbl = (
+        f"D{int(peak_hr // 24) + 1} {peak_hh:02d}:{peak_mm:02d}"
+        if total_span_hr > 28.0
+        else f"{peak_hh:02d}:{peak_mm:02d}"
+    )
+    offset_x = -total_span_hr * 0.15 if peak_hr > (t_hr[0] + total_span_hr * 0.72) else total_span_hr * 0.05
     ax1.scatter([peak_hr], [peak_mw], color=COLORS["load"], s=28, zorder=6)
     ax1.annotate(
-        f"Peak {peak_mw:.2f} MW ({peak_hh:02d}:{peak_mm:02d})",
+        f"Peak {peak_mw:.2f} MW ({peak_time_lbl})",
         xy=(peak_hr, peak_mw),
-        xytext=(peak_hr - 3.6 if peak_hr > 18 else peak_hr + 1.0, peak_mw + 1.15),
+        xytext=(peak_hr + offset_x, peak_mw + 1.15),
         fontsize=8.3,
         fontweight="semibold",
         color=COLORS["text"],
@@ -356,9 +376,11 @@ def plot_dispatch_dashboard(
     ax2_soc.spines["bottom"].set_visible(False)
     ax2_soc.spines["right"].set_color(COLORS["soc"])
     ax2_soc.spines["right"].set_linewidth(0.9)
+    soc_marker = "o" if len(t_hr) <= 200 else None
     ax2_soc.plot(
         t_hr, bess_soc,
-        color=COLORS["soc"], linewidth=2.1, marker="o", markersize=3.0,
+        color=COLORS["soc"], linewidth=1.8 if soc_marker is None else 2.1,
+        marker=soc_marker, markersize=3.0,
         markerfacecolor="white", markeredgewidth=1.3,
         label="BESS SoC (%)", zorder=5,
     )
@@ -453,23 +475,18 @@ def plot_dispatch_dashboard(
     )
 
     # -------------------------------------------------------------------------
-    # Panel 5: Economic Analysis (5a: Price & Cost Benchmarks | 5b: Cost Spread)
+    # Panel 5: Economic Analysis (5a: Diesel BPP vs LCOE | 5b: Cost Spread)
     # -------------------------------------------------------------------------
     gs_econ = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=gs[4], width_ratios=[1.35, 1.15], wspace=0.20)
 
-    # Panel 5a: Grid Import Price Profile vs. Diesel-Only & PV+BESS LCOE
+    # Panel 5a: Isolated 20 kV Diesel BPP Profile vs. PV & PV+BESS LCOE
     ax5a = fig.add_subplot(gs_econ[0])
     _style_axis(ax5a, hide_x_labels=False)
 
-    ax5a.axhline(
-        diesel_only,
-        color=COLORS["diesel_only"], linewidth=2.0, linestyle="-.",
-        label=f"Diesel-Only (${diesel_only:.4f}/kWh)", zorder=4,
-    )
     ax5a.step(
-        t_hr, grid_price, where="mid",
-        color=COLORS["grid_price"], linewidth=2.1,
-        label="Grid Import Price ($/kWh)", zorder=4,
+        t_hr, diesel_bpp_series, where="mid",
+        color=COLORS["diesel_only"], linewidth=2.1,
+        label=f"Diesel BPP / PLTD Cost (${diesel_bpp:.4f}/kWh)", zorder=4,
     )
     ax5a.axhline(
         lcoe_comb,
@@ -482,31 +499,35 @@ def plot_dispatch_dashboard(
         label=f"PV Only LCOE (${lcoe_pv:.4f}/kWh)", zorder=4,
     )
     ax5a.fill_between(
-        t_hr, lcoe_comb, grid_price,
-        where=(grid_price >= lcoe_comb),
+        t_hr, lcoe_comb, diesel_bpp_series,
+        where=(diesel_bpp_series >= lcoe_comb),
         step="mid", color=COLORS["savings"], alpha=0.13, zorder=2,
     )
     ax5a.fill_between(
-        t_hr, lcoe_comb, grid_price,
-        where=(grid_price < lcoe_comb),
+        t_hr, lcoe_comb, diesel_bpp_series,
+        where=(diesel_bpp_series < lcoe_comb),
         step="mid", color=COLORS["premium"], alpha=0.12, zorder=2,
     )
 
-    p5_max = max(grid_price.max(), diesel_only, lcoe_comb, lcoe_pv) * 1.22
+    p5_max = max(diesel_bpp_series.max(), lcoe_comb, lcoe_pv) * 1.25
     ax5a.set_ylim(0.0, p5_max)
     ax5a.set_xlim(x_min, x_max)
-    ax5a.set_xticks(x_ticks)
-    ax5a.set_xticklabels(x_tick_labels)
-    ax5a.set_ylabel("Cost / Price ($/kWh)", fontsize=9.5, fontweight="bold", color=COLORS["text"])
+    if len(x_ticks) > 8:
+        ax5a.set_xticks(x_ticks[::2])
+        ax5a.set_xticklabels(x_tick_labels[::2])
+    else:
+        ax5a.set_xticks(x_ticks)
+        ax5a.set_xticklabels(x_tick_labels)
+    ax5a.set_ylabel("Cost / LCOE ($/kWh)", fontsize=9.5, fontweight="bold", color=COLORS["text"])
     ax5a.set_xlabel("Time (WITA / UTC+8)", fontsize=9.5, fontweight="bold", color=COLORS["text"], labelpad=6)
     _place_panel_header(
         ax5a,
-        "5a. Grid Import Price vs. Diesel-Only & PV+BESS LCOE",
+        "5a. Isolated 20 kV Diesel BPP vs. PV+BESS LCOE",
         ncol=2,
         title_pad=34.0,
     )
 
-    # Panel 5b: LCOE vs. Grid Import vs. Hybrid vs. Diesel-Only Bar Chart
+    # Panel 5b: Fully Isolated System Unit Cost Comparison Bar Chart
     ax5b = fig.add_subplot(gs_econ[1])
     _style_axis(ax5b, hide_x_labels=False)
     ax5b.grid(axis="x", visible=False)
@@ -514,25 +535,23 @@ def plot_dispatch_dashboard(
     categories = [
         "PV Only\nLCOE",
         "PV+BESS\nLCOE",
-        "Grid\nImport",
-        "Hybrid\nBlended",
-        "Diesel\nOnly",
+        "Hybrid System\n(Blended)",
+        "Diesel-Only\n(PLTD BPP)",
     ]
-    values = [lcoe_pv, lcoe_comb, grid_wtd, hybrid_blended, diesel_only]
+    values = [lcoe_pv, lcoe_comb, hybrid_blended, diesel_bpp]
     bar_colors = [
         COLORS["lcoe_pv"],
         COLORS["lcoe_comb"],
-        COLORS["grid_price"],
         COLORS["hybrid"],
         COLORS["diesel_only"],
     ]
 
-    bars = ax5b.bar(categories, values, width=0.56, color=bar_colors, alpha=0.90, edgecolor="white", linewidth=0.6, zorder=3)
+    bars = ax5b.bar(categories, values, width=0.52, color=bar_colors, alpha=0.90, edgecolor="white", linewidth=0.6, zorder=3)
     b_max = max(values) * 1.62
     ax5b.set_ylim(0.0, b_max)
     ax5b.set_ylabel("Cost ($/kWh)", fontsize=9.5, fontweight="bold", color=COLORS["text"])
-    ax5b.set_xlabel("Supply Option / Benchmark", fontsize=9.5, fontweight="bold", color=COLORS["text"], labelpad=6)
-    ax5b.tick_params(axis="x", labelsize=8.3)
+    ax5b.set_xlabel("Isolated System Supply Option", fontsize=9.5, fontweight="bold", color=COLORS["text"], labelpad=6)
+    ax5b.tick_params(axis="x", labelsize=8.4)
 
     for bar, val in zip(bars, values):
         ax5b.text(
@@ -541,17 +560,16 @@ def plot_dispatch_dashboard(
             f"${val:.4f}",
             ha="center",
             va="bottom",
-            fontsize=8.2,
+            fontsize=8.4,
             fontweight="bold",
             color=COLORS["text"],
         )
 
-    # Dual cost-spread callout badge (vs. Grid & vs. Diesel-Only)
     badge_color = COLORS["savings"] if hyb_sav_yr >= 0 else COLORS["premium"]
     badge_bg = "#DCFCE7" if hyb_sav_yr >= 0 else "#FEE2E2"
     diff_text = (
-        f"PV+BESS vs. Grid Import: ${cost_diff:+.4f}/kWh ({cost_diff_pct:+.1f}%)  |  ${annual_diff:+,.0f}/yr\n"
-        f"Hybrid vs. Diesel-Only:  ${(diesel_only - hybrid_blended):+.4f}/kWh ({hyb_sav_pct:+.1f}%)  |  ${hyb_sav_yr:+,.0f}/yr"
+        f"PV+BESS vs. Diesel BPP: ${unit_diff:+.4f}/kWh ({unit_diff_pct:+.1f}%)\n"
+        f"Hybrid vs. Diesel-Only: ${hyb_sav_kwh:+.4f}/kWh ({hyb_sav_pct:+.1f}%)  |  Saves ${hyb_sav_yr:,.0f}/yr"
     )
     ax5b.text(
         0.50, 0.97,
@@ -559,7 +577,7 @@ def plot_dispatch_dashboard(
         transform=ax5b.transAxes,
         ha="center",
         va="top",
-        fontsize=7.9,
+        fontsize=8.0,
         fontweight="semibold",
         color=badge_color,
         parse_math=False,
@@ -568,7 +586,7 @@ def plot_dispatch_dashboard(
     )
     _place_panel_header(
         ax5b,
-        "5b. Unit Cost Comparison (LCOE vs. Grid vs. Diesel-Only)",
+        "5b. Isolated System Cost Spread (LCOE vs. Diesel BPP)",
         title_pad=34.0,
         show_legend=False,
     )
@@ -590,7 +608,7 @@ def plot_dispatch_dashboard(
 def main():
     parser = argparse.ArgumentParser(description="Visualize Nusa Penida Microgrid MILP dispatch & LCOE results")
     parser.add_argument("--csv", type=str, default="output/dispatch_results.csv", help="CSV output file from run_simulation.py")
-    parser.add_argument("--profiles-csv", type=str, default="input/input_profiles.csv", help="Optional profiles CSV if grid_price_usd_kwh is missing from dispatch CSV")
+    parser.add_argument("--profiles-csv", type=str, default="input/NP_Genprofile_PV1_PV2.csv", help="Optional profiles CSV if grid_price_usd_kwh is missing from dispatch CSV")
     parser.add_argument("--econ-csv", type=str, default="input/input_economics.csv", help="Optional PV + BESS CAPEX/OPEX CSV")
     parser.add_argument("--dt", type=float, default=0.5, help="Time resolution in hours (default: 0.5)")
     parser.add_argument("--out", type=str, default="output/nusa_penida_dispatch.png", help="Output PNG image path")

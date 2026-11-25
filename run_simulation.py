@@ -1,6 +1,6 @@
 """
-Main script to run MILP simulation, optimization, and LCOE economic comparison
-for the Nusa Penida Isolated Microgrid.
+Main script to run Rolling Horizon MILP simulation (default 48-hour lookahead),
+optimization, and LCOE economic comparison for the Nusa Penida Isolated Microgrid.
 Supports CSV inputs from `input/` and saves all generated results to `output/`.
 """
 
@@ -23,7 +23,11 @@ from src.economics import (
     print_economic_summary,
     save_economics_template_csv,
 )
-from src.microgrid_milp import build_nusa_penida_milp, extract_results
+from src.microgrid_milp import (
+    build_nusa_penida_milp,
+    extract_results,
+    solve_rolling_horizon_milp,
+)
 
 
 def get_available_solver(preferred: str = "appsi_highs"):
@@ -51,20 +55,46 @@ def _ensure_parent_dir(file_path: str) -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Nusa Penida Isolated Microgrid MILP Optimization & LCOE Analysis")
+    parser = argparse.ArgumentParser(
+        description="Nusa Penida Isolated Microgrid Rolling Horizon MILP (48h) & LCOE Analysis"
+    )
     parser.add_argument(
         "--csv",
         type=str,
         default=None,
-        help="Path to CSV containing load_kw, pv_avail_kw, and optional grid_price_usd_kwh (default: input/input_profiles.csv)",
+        help="Path to CSV containing load_kw, pv_avail_kw, and optional grid_price_usd_kwh (default: input/NP_Genprofile_PV1_PV2.csv)",
     )
     parser.add_argument(
         "--econ-csv",
         type=str,
         default="input/input_economics.csv",
-        help="Path to PV + BESS CAPEX/OPEX CSV (default: input/input_economics.csv if present)",
+        help="Path to PV + BESS + Diesel CAPEX/OPEX CSV (default: input/input_economics.csv if present)",
     )
     parser.add_argument("--dt", type=float, default=0.5, help="Time resolution in hours (default: 0.5 = 30 min)")
+    parser.add_argument("--days", type=int, default=3, help="Number of days for synthetic profiles / template export (default: 3)")
+    parser.add_argument(
+        "--max-days",
+        type=float,
+        default=None,
+        help="Optional limit on number of days to simulate from the loaded CSV (default: full CSV)",
+    )
+    parser.add_argument(
+        "--horizon",
+        type=float,
+        default=48.0,
+        help="Rolling horizon lookahead window in hours (default: 48.0)",
+    )
+    parser.add_argument(
+        "--step",
+        type=float,
+        default=24.0,
+        help="Rolling horizon commit step in hours (default: 24.0)",
+    )
+    parser.add_argument(
+        "--single-shot",
+        action="store_true",
+        help="Disable rolling horizon and solve the entire profile in a single MILP",
+    )
     parser.add_argument(
         "--bess",
         type=str,
@@ -87,23 +117,32 @@ def main():
     args = parser.parse_args()
 
     if args.export_templates:
-        export_sample_profiles_csv("input/input_profiles.csv", n_days=1, dt_hours=args.dt)
+        export_sample_profiles_csv("input/input_profiles.csv", n_days=args.days, dt_hours=args.dt)
         save_economics_template_csv("input/input_economics.csv")
-        print("Exported CSV input templates:")
+        print(f"Exported CSV input templates ({args.days} day(s), dt={args.dt} h):")
         print("  - input/input_profiles.csv  (columns: hour, load_kw, pv_avail_kw, grid_price_usd_kwh)")
         print("  - input/input_economics.csv (PV, BESS & Diesel CAPEX/OPEX and financial parameters)")
         return
 
-    default_profile_path = "input/input_profiles.csv"
+    default_profile_path = "input/NP_Genprofile_PV1_PV2.csv"
+    fallback_profile_path = "input/input_profiles.csv"
     if args.csv:
-        profiles = load_profiles_from_csv(args.csv)
+        profiles = load_profiles_from_csv(args.csv, dt_hours=args.dt)
         print(f"Loaded profile data from: {args.csv} ({len(profiles)} timesteps)")
     elif os.path.exists(default_profile_path):
-        profiles = load_profiles_from_csv(default_profile_path)
+        profiles = load_profiles_from_csv(default_profile_path, dt_hours=args.dt)
         print(f"Loaded profile data from: {default_profile_path} ({len(profiles)} timesteps)")
+    elif os.path.exists(fallback_profile_path):
+        profiles = load_profiles_from_csv(fallback_profile_path, dt_hours=args.dt)
+        print(f"Loaded profile data from: {fallback_profile_path} ({len(profiles)} timesteps)")
     else:
-        profiles = generate_sample_profiles(n_days=1, dt_hours=args.dt)
-        print(f"Using calibrated Nusa Penida synthetic profiles ({len(profiles)} timesteps, dt={args.dt} h)")
+        profiles = generate_sample_profiles(n_days=args.days, dt_hours=args.dt)
+        print(f"Using calibrated Nusa Penida synthetic profiles ({len(profiles)} timesteps, {args.days} days, dt={args.dt} h)")
+
+    if args.max_days is not None and args.max_days > 0:
+        max_steps = int(round(args.max_days * 24.0 / args.dt))
+        profiles = profiles.iloc[:max_steps].copy().reset_index(drop=True)
+        print(f"Sliced profile to first {args.max_days:g} day(s) ({len(profiles)} timesteps)")
 
     if args.econ_csv and os.path.exists(args.econ_csv):
         econ_params = load_economics_from_csv(args.econ_csv)
@@ -111,14 +150,6 @@ def main():
     else:
         econ_params = dict(DEFAULT_ECONOMICS)
         print("Using built-in default PV + BESS + Diesel economic parameters")
-
-    model = build_nusa_penida_milp(
-        profiles=profiles,
-        dt_hours=args.dt,
-        bess_scenario=args.bess,
-        include_ps_load=args.include_ps,
-        allow_bess_reserve=not args.no_bess_reserve,
-    )
 
     solver_name, opt = get_available_solver(args.solver)
     if opt is None:
@@ -129,17 +160,39 @@ def main():
         )
         sys.exit(1)
 
-    print(f"Running MILP optimization with solver '{solver_name}' (BESS scenario: {args.bess})...")
-    if solver_name == "appsi_highs":
-        opt.config.mip_gap = 0.005
-        opt.config.time_limit = 60.0
-        res = opt.solve(model)
+    if args.single_shot:
+        print(f"Running Single-Shot MILP with solver '{solver_name}' (BESS scenario: {args.bess})...")
+        model = build_nusa_penida_milp(
+            profiles=profiles,
+            dt_hours=args.dt,
+            bess_scenario=args.bess,
+            include_ps_load=args.include_ps,
+            allow_bess_reserve=not args.no_bess_reserve,
+        )
+        if solver_name == "appsi_highs":
+            opt.config.mip_gap = 0.005
+            opt.config.time_limit = 60.0
+            res = opt.solve(model)
+        else:
+            res = opt.solve(model, tee=False)
+        print(f"Termination status: {res.solver.termination_condition}")
+        df_res = extract_results(model, profiles)
+        mode_label = "Single-Shot MILP"
     else:
-        res = opt.solve(model, tee=False)
+        print(f"Running Rolling Horizon MILP with solver '{solver_name}' (BESS scenario: {args.bess})...")
+        df_res = solve_rolling_horizon_milp(
+            profiles=profiles,
+            opt=opt,
+            solver_name=solver_name,
+            dt_hours=args.dt,
+            horizon_hours=args.horizon,
+            step_hours=args.step,
+            bess_scenario=args.bess,
+            include_ps_load=args.include_ps,
+            allow_bess_reserve=not args.no_bess_reserve,
+        )
+        mode_label = f"Rolling Horizon {args.horizon:.0f}h / Step {args.step:.0f}h"
 
-    print(f"Termination status: {res.solver.termination_condition}")
-
-    df_res = extract_results(model, profiles)
     _ensure_parent_dir(args.out)
     df_res.to_csv(args.out, index=False)
 
@@ -155,8 +208,11 @@ def main():
 
     pv_util_pct = (100.0 * e_pv_used / e_pv_avail) if e_pv_avail > 0 else 0.0
     pv_share_pct = (100.0 * e_pv_used / e_load) if e_load > 0 else 0.0
+    sim_hours = len(df_res) * dt
 
     print("\n================ OPTIMIZATION SUMMARY ================")
+    print(f"Optimization Mode          : {mode_label}")
+    print(f"Simulated Horizon          : {sim_hours:.1f} hours ({sim_hours / 24.0:.2f} days)")
     print(f"Total System Load          : {e_load:8.2f} MWh")
     print(f"Available Solar PV         : {e_pv_avail:8.2f} MWh")
     print(f"Utilized Solar PV          : {e_pv_used:8.2f} MWh ({pv_util_pct:.2f}% of available, {pv_share_pct:.2f}% of load)")
@@ -184,7 +240,7 @@ def main():
         plot_dispatch_dashboard(
             df_res,
             dt_hours=args.dt,
-            title=f"Nusa Penida Isolated Microgrid MILP Optimization (BESS: {args.bess})",
+            title=f"Nusa Penida Microgrid MILP ({mode_label} | BESS: {args.bess})",
             save_path=args.plot_out,
             show=False,
             econ_summary=econ_summary,

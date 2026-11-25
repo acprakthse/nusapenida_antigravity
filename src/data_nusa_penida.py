@@ -156,35 +156,36 @@ def generate_sample_profiles(
     rows = []
     for d in range(n_days):
         for s in range(steps_per_day):
-            hour = s * dt_hours
+            hour_of_day = s * dt_hours
+            elapsed_hour = (d * steps_per_day + s) * dt_hours
             # Daily Nusa Penida load pattern (tourism + residential)
             # Base + evening peak (19:30) + midday shoulder (13:00) - night valley (04:00)
-            evening_peak = math.exp(-0.5 * ((hour - 19.5) / 2.4) ** 2)
-            day_shoulder = math.exp(-0.5 * ((hour - 13.0) / 3.2) ** 2)
-            night_valley = math.exp(-0.5 * ((hour - 4.0) / 2.2) ** 2)
+            evening_peak = math.exp(-0.5 * ((hour_of_day - 19.5) / 2.4) ** 2)
+            day_shoulder = math.exp(-0.5 * ((hour_of_day - 13.0) / 3.2) ** 2)
+            night_valley = math.exp(-0.5 * ((hour_of_day - 4.0) / 2.2) ** 2)
             load_norm = 0.68 + 0.32 * evening_peak + 0.11 * day_shoulder - 0.12 * night_valley
             load_kw = round(peak_load_kw * load_norm / 1.00, 1)
 
             # Suana Solar PV generation pattern (06:00 - 18:00 WITA)
-            if 6.0 <= hour <= 18.0:
-                pv_raw = math.sin(math.pi * (hour - 6.0) / 12.0) ** 1.25
+            if 6.0 <= hour_of_day <= 18.0:
+                pv_raw = math.sin(math.pi * (hour_of_day - 6.0) / 12.0) ** 1.25
                 # Slight midday cloud dip around 13:30
-                cloud_dip = 0.85 if abs(hour - 13.5) < 0.6 else 1.0
+                cloud_dip = 0.85 if abs(hour_of_day - 13.5) < 0.6 else 1.0
                 pv_kw = round(min(pv_peak_kw, pv_peak_kw * pv_raw * cloud_dip), 1)
             else:
                 pv_kw = 0.0
 
             # Sample Time-of-Use (TOU) grid electricity import price (USD/kWh)
-            if 18.0 <= hour < 22.0:
+            if 18.0 <= hour_of_day < 22.0:
                 grid_price = 0.170  # Evening peak tariff
-            elif 8.0 <= hour < 18.0:
+            elif 8.0 <= hour_of_day < 18.0:
                 grid_price = 0.130  # Daytime shoulder tariff
             else:
                 grid_price = 0.110  # Night off-peak tariff
 
             rows.append({
                 "t": d * steps_per_day + s,
-                "hour": hour,
+                "hour": elapsed_hour,
                 "load_kw": load_kw,
                 "pv_avail_kw": pv_kw,
                 "grid_price_usd_kwh": grid_price,
@@ -213,11 +214,13 @@ def load_profiles_from_csv(
     pv_col: str = "pv_avail_kw",
     price_col: str = "grid_price_usd_kwh",
     default_grid_price: float = 0.125,
+    dt_hours: float = 0.5,
 ) -> pd.DataFrame:
     """
     Load user-provided load, Solar PV generation, and electricity price profiles from a CSV file.
     Required columns: `load_col` (kW) and `pv_col` (kW).
-    Optional columns: `hour` (hours) and `price_col` (USD/kWh; defaults to `default_grid_price`).
+    Optional columns: `hour` (numeric hours or datetime string) and `price_col` (USD/kWh).
+    Negative PV values (nighttime inverter standby losses) are clipped to 0.0 kW.
     """
     df = pd.read_csv(csv_path)
     if load_col not in df.columns or pv_col not in df.columns:
@@ -225,15 +228,29 @@ def load_profiles_from_csv(
             f"CSV must contain columns '{load_col}' and '{pv_col}'. "
             f"Found columns: {list(df.columns)}"
         )
+
     out = pd.DataFrame({
         "t": range(len(df)),
-        "load_kw": df[load_col].astype(float),
-        "pv_avail_kw": df[pv_col].astype(float),
+        "load_kw": pd.to_numeric(df[load_col], errors="coerce").fillna(0.0).clip(lower=0.0),
+        "pv_avail_kw": pd.to_numeric(df[pv_col], errors="coerce").fillna(0.0).clip(lower=0.0),
     })
+
     if "hour" in df.columns:
-        out["hour"] = df["hour"].astype(float)
+        numeric_hr = pd.to_numeric(df["hour"], errors="coerce")
+        if numeric_hr.notna().all():
+            out["hour"] = numeric_hr.astype(float)
+        else:
+            # Handle datetime strings such as "7/2/25 0:30"
+            out["timestamp"] = df["hour"].astype(str)
+            out["hour"] = [i * dt_hours for i in range(len(df))]
+    else:
+        out["hour"] = [i * dt_hours for i in range(len(df))]
+
     if price_col in df.columns:
-        out["grid_price_usd_kwh"] = df[price_col].astype(float)
+        out["grid_price_usd_kwh"] = (
+            pd.to_numeric(df[price_col], errors="coerce").fillna(default_grid_price).astype(float)
+        )
     else:
         out["grid_price_usd_kwh"] = float(default_grid_price)
+
     return out
