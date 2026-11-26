@@ -1,4 +1,5 @@
 metric,value
+diesel_baseline_source,Measured PLTD (total_mdu_pancabina_kw)
 crf,0.10185220882315059
 pv_capex_total_usd,3570000.0
 bess_capex_total_usd,704000.0
@@ -10,11 +11,12 @@ total_annual_cost_usd,535844.0235288914
 annual_pv_used_mwh,4961.843908696798
 annual_diesel_mwh,91553.92456779824
 annual_load_mwh,96443.97607142858
+annual_baseline_pltd_mwh,74914.13821428572
 lcoe_pv_only_usd_kwh,0.08597859855101629
 lcoe_pv_bess_usd_kwh,0.10799292226619597
 diesel_bpp_avg_usd_kwh,0.24882034999999997
 diesel_bpp_load_weighted_usd_kwh,0.24882034999999997
-diesel_only_annual_cost_usd,23997223.881484482
+diesel_only_annual_cost_usd,18640162.090426944
 hybrid_diesel_annual_cost_usd,22780479.55483315
 hybrid_total_annual_cost_usd,23316323.578362044
 hybrid_blended_cost_usd_kwh,0.24176028952905726
@@ -23,4 +25,4 @@ cost_diff_vs_bpp_pct,56.59803457948838
 displaced_annual_savings_usd,698763.7144784139
 hybrid_savings_vs_diesel_usd_kwh,0.007060060470942708
 hybrid_savings_vs_diesel_pct,2.837412804436096
-hybrid_annual_savings_vs_diesel_usd,680900.3031224385
+hybrid_annual_savings_vs_diesel_usd,-4676161.4879351

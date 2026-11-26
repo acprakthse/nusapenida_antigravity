@@ -2,14 +2,17 @@
 Economic analysis module for the Fully Isolated Nusa Penida Microgrid (20 kV AC-Coupled).
 Topology: PLTD (PLN + Leased Diesel) + Solar PV + BESS on isolated 20 kV bus (no external grid).
 
-In this fully isolated system, the `grid_price_usd_kwh` column represents the
-Diesel Generation Production Cost (BPP PLTD, USD/kWh) on the 20 kV bus.
+In this fully isolated system:
+  - `grid_price_usd_kwh` represents the Diesel Generation Production Cost (BPP PLTD, USD/kWh).
+  - `total_mdu_pancabina_kw` (when present in the input CSV) represents the real measured
+    PLTD generation used as the Diesel-Only Baseline.
+
 Computes:
   1. Solar PV Only LCOE (USD/kWh)
   2. Combined Solar PV + BESS LCOE (USD/kWh)
-  3. Hybrid Isolated System Blended Cost (Dispatched Diesel * BPP + PV/BESS LCOE)
-  4. Diesel-Only (PLTD BPP) Baseline Cost (100% of load supplied by PLTD)
-  5. Unit cost spread ($/kWh) and estimated annual cost savings ($/year).
+  3. Hybrid Isolated System Blended Cost (Dispatched Diesel * BPP + Annualized PV/BESS)
+  4. Measured Diesel-Only Baseline (using `total_mdu_pancabina_kw` * BPP PLTD)
+  5. Unit cost spread ($/kWh) and annual cost comparison ($/year).
 """
 
 from __future__ import annotations
@@ -105,7 +108,7 @@ def compute_lcoe_and_comparison(
 ) -> Dict[str, Any]:
     """
     Compute PV-only LCOE, combined PV+BESS LCOE, hybrid blended system cost,
-    and savings relative to the Diesel-Only (PLTD BPP) isolated baseline.
+    and comparison against the real measured Diesel-Only Baseline (`total_mdu_pancabina_kw`).
     """
     cfg = dict(DEFAULT_ECONOMICS)
     if economics:
@@ -147,20 +150,38 @@ def compute_lcoe_and_comparison(
     else:
         bpp_arr = np.full(len(df_dispatch), default_diesel_bpp, dtype=float)
 
+    # Use real measured PLTD (`total_mdu_pancabina_kw`) for Diesel-Only baseline if available
+    if "total_mdu_pancabina_kw" in df_dispatch.columns:
+        baseline_pltd_arr = (
+            pd.to_numeric(df_dispatch["total_mdu_pancabina_kw"], errors="coerce")
+            .ffill()
+            .bfill()
+            .fillna(0.0)
+            .clip(lower=0.0)
+            .to_numpy(dtype=float)
+        )
+        baseline_source = "Measured PLTD (total_mdu_pancabina_kw)"
+    else:
+        baseline_pltd_arr = load_arr
+        baseline_source = "System Load (load_kw)"
+
     annual_pv_used_kwh = float(np.sum(pv_arr) * dt_hours) * annual_factor
     annual_load_kwh = float(np.sum(load_arr) * dt_hours) * annual_factor
     annual_diesel_kwh = float(np.sum(diesel_arr) * dt_hours) * annual_factor
+    annual_baseline_pltd_kwh = float(np.sum(baseline_pltd_arr) * dt_hours) * annual_factor
 
     # 3. LCOE (USD/kWh)
     lcoe_pv_only = pv_annual_total_cost / annual_pv_used_kwh if annual_pv_used_kwh > 0 else float("nan")
     lcoe_pv_bess = total_annual_pv_bess_cost_usd / annual_pv_used_kwh if annual_pv_used_kwh > 0 else float("nan")
 
-    # 4. Isolated System Diesel-Only (PLTD BPP) Baseline vs. Hybrid (PV + BESS + PLTD)
+    # 4. Measured Diesel-Only Baseline vs. Hybrid (PV + BESS + PLTD)
     diesel_bpp_avg = float(np.mean(bpp_arr))
-    diesel_bpp_load_weighted = (
-        float(np.sum(load_arr * bpp_arr) / np.sum(load_arr)) if np.sum(load_arr) > 0 else diesel_bpp_avg
+    diesel_only_annual_cost_usd = float(np.sum(baseline_pltd_arr * bpp_arr) * dt_hours) * annual_factor
+    diesel_bpp_weighted = (
+        diesel_only_annual_cost_usd / annual_baseline_pltd_kwh
+        if annual_baseline_pltd_kwh > 0
+        else diesel_bpp_avg
     )
-    diesel_only_annual_cost_usd = float(np.sum(load_arr * bpp_arr) * dt_hours) * annual_factor
 
     hybrid_diesel_annual_cost_usd = float(np.sum(diesel_arr * bpp_arr) * dt_hours) * annual_factor
     hybrid_total_annual_cost_usd = hybrid_diesel_annual_cost_usd + total_annual_pv_bess_cost_usd
@@ -168,20 +189,25 @@ def compute_lcoe_and_comparison(
         hybrid_total_annual_cost_usd / annual_load_kwh if annual_load_kwh > 0 else float("nan")
     )
 
-    # 5. Cost Differences & Savings (Positive = PV+BESS / Hybrid saves money vs. Diesel-Only BPP)
-    unit_diff_usd_kwh = diesel_bpp_load_weighted - lcoe_pv_bess
+    # 5. Cost Differences & Savings
+    # 5a. Unit cost difference (Measured PLTD BPP - PV+BESS LCOE) & PV+BESS displaced savings
+    unit_diff_usd_kwh = diesel_bpp_weighted - lcoe_pv_bess
     unit_diff_pct = (
-        100.0 * unit_diff_usd_kwh / diesel_bpp_load_weighted if diesel_bpp_load_weighted > 0 else 0.0
+        100.0 * unit_diff_usd_kwh / diesel_bpp_weighted if diesel_bpp_weighted > 0 else 0.0
     )
     displaced_annual_savings_usd = unit_diff_usd_kwh * annual_pv_used_kwh
 
-    hybrid_savings_usd_kwh = diesel_bpp_load_weighted - hybrid_blended_cost_usd_kwh
+    # 5b. Blended unit cost difference (Measured PLTD BPP - Hybrid Blended)
+    hybrid_savings_usd_kwh = diesel_bpp_weighted - hybrid_blended_cost_usd_kwh
     hybrid_savings_pct = (
-        100.0 * hybrid_savings_usd_kwh / diesel_bpp_load_weighted if diesel_bpp_load_weighted > 0 else 0.0
+        100.0 * hybrid_savings_usd_kwh / diesel_bpp_weighted if diesel_bpp_weighted > 0 else 0.0
     )
-    hybrid_annual_savings_usd = diesel_only_annual_cost_usd - hybrid_total_annual_cost_usd
+
+    # 5c. Direct annual cost difference against Measured PLTD Baseline (total_mdu_pancabina_kw)
+    annual_diff_vs_measured_pltd_usd = diesel_only_annual_cost_usd - hybrid_total_annual_cost_usd
 
     return {
+        "diesel_baseline_source": baseline_source,
         "crf": crf,
         "pv_capex_total_usd": pv_capex_total,
         "bess_capex_total_usd": bess_capex_total,
@@ -193,10 +219,11 @@ def compute_lcoe_and_comparison(
         "annual_pv_used_mwh": annual_pv_used_kwh / 1000.0,
         "annual_diesel_mwh": annual_diesel_kwh / 1000.0,
         "annual_load_mwh": annual_load_kwh / 1000.0,
+        "annual_baseline_pltd_mwh": annual_baseline_pltd_kwh / 1000.0,
         "lcoe_pv_only_usd_kwh": lcoe_pv_only,
         "lcoe_pv_bess_usd_kwh": lcoe_pv_bess,
         "diesel_bpp_avg_usd_kwh": diesel_bpp_avg,
-        "diesel_bpp_load_weighted_usd_kwh": diesel_bpp_load_weighted,
+        "diesel_bpp_load_weighted_usd_kwh": diesel_bpp_weighted,
         "diesel_only_annual_cost_usd": diesel_only_annual_cost_usd,
         "hybrid_diesel_annual_cost_usd": hybrid_diesel_annual_cost_usd,
         "hybrid_total_annual_cost_usd": hybrid_total_annual_cost_usd,
@@ -206,39 +233,43 @@ def compute_lcoe_and_comparison(
         "displaced_annual_savings_usd": displaced_annual_savings_usd,
         "hybrid_savings_vs_diesel_usd_kwh": hybrid_savings_usd_kwh,
         "hybrid_savings_vs_diesel_pct": hybrid_savings_pct,
-        "hybrid_annual_savings_vs_diesel_usd": hybrid_annual_savings_usd,
+        "hybrid_annual_savings_vs_diesel_usd": annual_diff_vs_measured_pltd_usd,
     }
 
 
 def print_economic_summary(summary: Dict[str, Any]) -> None:
-    """Print a clean English summary of LCOE vs. Isolated Diesel BPP (PLTD)."""
+    """Print a clean English summary of LCOE vs. Measured Diesel-Only Baseline (PLTD)."""
     diff_u = summary["cost_diff_vs_bpp_usd_kwh"]
     diff_u_pct = summary["cost_diff_vs_bpp_pct"]
+    disp_sav = summary["displaced_annual_savings_usd"]
     hyb_sav_kwh = summary["hybrid_savings_vs_diesel_usd_kwh"]
     hyb_sav_pct = summary["hybrid_savings_vs_diesel_pct"]
-    hyb_sav_yr = summary["hybrid_annual_savings_vs_diesel_usd"]
+    ann_diff = summary["hybrid_annual_savings_vs_diesel_usd"]
 
-    print("\n======= ISOLATED MICROGRID LCOE vs. DIESEL BPP (PLTD) =======")
+    print("\n===== ISOLATED MICROGRID LCOE vs. MEASURED PLTD BASELINE =====")
+    print(f"Diesel-Only Baseline Source         : {summary['diesel_baseline_source']}")
     print(f"Total CAPEX (PV + BESS)             : ${summary['total_capex_usd']:,.0f}")
     print(f"  - Solar PV CAPEX                  : ${summary['pv_capex_total_usd']:,.0f}")
     print(f"  - BESS CAPEX                      : ${summary['bess_capex_total_usd']:,.0f} (Repl. PV: ${summary['bess_repl_pv_usd']:,.0f})")
     print(f"Annualized PV + BESS Cost           : ${summary['total_annual_cost_usd']:,.0f} / year")
     print(f"Annual Utilized Solar PV            : {summary['annual_pv_used_mwh']:,.1f} MWh / year")
-    print(f"Annual Dispatched Diesel (PLTD)     : {summary['annual_diesel_mwh']:,.1f} MWh / year")
+    print(f"Annual MILP Dispatched PLTD         : {summary['annual_diesel_mwh']:,.1f} MWh / year")
     print(f"Annual Total System Load            : {summary['annual_load_mwh']:,.1f} MWh / year")
-    print("-------------------------------------------------------------")
+    print(f"Annual Measured PLTD Baseline       : {summary['annual_baseline_pltd_mwh']:,.1f} MWh / year")
+    print("--------------------------------------------------------------")
     print("UNIT ENERGY COST COMPARISON (USD/kWh):")
     print(f"  1. Solar PV Only LCOE             : ${summary['lcoe_pv_only_usd_kwh']:.4f} / kWh")
     print(f"  2. Solar PV + BESS LCOE           : ${summary['lcoe_pv_bess_usd_kwh']:.4f} / kWh")
     print(f"  3. Hybrid System (Blended)        : ${summary['hybrid_blended_cost_usd_kwh']:.4f} / kWh")
-    print(f"  4. Diesel-Only Baseline (PLTD BPP): ${summary['diesel_bpp_load_weighted_usd_kwh']:.4f} / kWh")
-    print("-------------------------------------------------------------")
-    print("COST DIFFERENCES & ANNUAL SAVINGS (ISOLATED 20 kV SYSTEM):")
-    print(f"  PV+BESS LCOE vs. Diesel BPP (unit): ${diff_u:+.4f} / kWh ({diff_u_pct:+.1f}%)")
-    print(f"  Hybrid vs. Diesel-Only (blended)  : ${hyb_sav_kwh:+.4f} / kWh ({hyb_sav_pct:+.1f}%)")
-    print(f"  Est. Total Annual System Savings  : ${hyb_sav_yr:+,.0f} / year")
-    print("-------------------------------------------------------------")
-    print("TOTAL ANNUAL SYSTEM SUPPLY COST (100% OF LOAD):")
-    print(f"  - Diesel-Only (100% PLTD)         : ${summary['diesel_only_annual_cost_usd']:,.0f} / year")
-    print(f"  - Hybrid (PLTD + PV + BESS)       : ${summary['hybrid_total_annual_cost_usd']:,.0f} / year")
-    print("=============================================================")
+    print(f"  4. Measured PLTD Baseline (BPP)   : ${summary['diesel_bpp_load_weighted_usd_kwh']:.4f} / kWh")
+    print("--------------------------------------------------------------")
+    print("COST DIFFERENCES & ANNUAL COMPARISON:")
+    print(f"  PV+BESS LCOE vs. PLTD BPP (unit)  : ${diff_u:+.4f} / kWh ({diff_u_pct:+.1f}%)")
+    print(f"  PV+BESS Displaced Fuel Savings    : ${disp_sav:+,.0f} / year")
+    print(f"  Hybrid vs. PLTD BPP (blended)     : ${hyb_sav_kwh:+.4f} / kWh ({hyb_sav_pct:+.1f}%)")
+    print("--------------------------------------------------------------")
+    print("TOTAL ANNUAL SUPPLY COST:")
+    print(f"  - Measured PLTD Baseline          : ${summary['diesel_only_annual_cost_usd']:,.0f} / year ({summary['annual_baseline_pltd_mwh']:,.1f} MWh)")
+    print(f"  - Hybrid (MILP PLTD + PV + BESS)  : ${summary['hybrid_total_annual_cost_usd']:,.0f} / year ({summary['annual_load_mwh']:,.1f} MWh)")
+    print(f"  - Direct Annual Difference        : ${ann_diff:+,.0f} / year")
+    print("==============================================================")

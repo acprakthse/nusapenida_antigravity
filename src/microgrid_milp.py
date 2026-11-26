@@ -428,6 +428,8 @@ def extract_results(
             "unserved_kw": pyo.value(model.P_unserved[t]),
             "grid_price_usd_kwh": float(pyo.value(model.bpp_pltd[t])),
         }
+        if "total_mdu_pancabina_kw" in profiles.columns:
+            row["total_mdu_pancabina_kw"] = float(profiles["total_mdu_pancabina_kw"].iloc[t])
         if "timestamp" in profiles.columns:
             row["timestamp"] = str(profiles["timestamp"].iloc[t])
         rows.append(row)

@@ -180,8 +180,8 @@ def plot_dispatch_dashboard(
     hybrid_blended = econ_summary["hybrid_blended_cost_usd_kwh"]
     unit_diff = econ_summary["cost_diff_vs_bpp_usd_kwh"]
     unit_diff_pct = econ_summary["cost_diff_vs_bpp_pct"]
+    disp_sav_yr = econ_summary["displaced_annual_savings_usd"]
     hyb_sav_kwh = econ_summary["hybrid_savings_vs_diesel_usd_kwh"]
-    hyb_sav_yr = econ_summary["hybrid_annual_savings_vs_diesel_usd"]
     hyb_sav_pct = econ_summary["hybrid_savings_vs_diesel_pct"]
 
     fig = plt.figure(figsize=(14.8, 15.0), dpi=140, facecolor="#FFFFFF")
@@ -204,8 +204,8 @@ def plot_dispatch_dashboard(
     kpi_text = (
         f"Load: {e_load:.1f} MWh (Peak {peak_mw:.2f} MW)   •   "
         f"PV: {e_pv_used:.2f}/{e_pv_avail:.2f} MWh ({pv_util:.0f}% util., {pv_share:.1f}% share)   •   "
-        f"PV+BESS LCOE: ${lcoe_comb:.4f}/kWh vs. Diesel BPP: ${diesel_bpp:.4f}/kWh   •   "
-        f"Hybrid Saves ${hyb_sav_yr/1e6:.2f}M/yr ({hyb_sav_pct:+.1f}%)"
+        f"PV+BESS LCOE: ${lcoe_comb:.4f}/kWh vs. Measured PLTD BPP: ${diesel_bpp:.4f}/kWh   •   "
+        f"PV+BESS Savings: ${disp_sav_yr/1e3:,.0f}k/yr"
     )
     fig.text(
         0.065, 0.952,
@@ -536,7 +536,7 @@ def plot_dispatch_dashboard(
         "PV Only\nLCOE",
         "PV+BESS\nLCOE",
         "Hybrid System\n(Blended)",
-        "Diesel-Only\n(PLTD BPP)",
+        "Measured PLTD\nBaseline (BPP)",
     ]
     values = [lcoe_pv, lcoe_comb, hybrid_blended, diesel_bpp]
     bar_colors = [
@@ -565,11 +565,11 @@ def plot_dispatch_dashboard(
             color=COLORS["text"],
         )
 
-    badge_color = COLORS["savings"] if hyb_sav_yr >= 0 else COLORS["premium"]
-    badge_bg = "#DCFCE7" if hyb_sav_yr >= 0 else "#FEE2E2"
+    badge_color = COLORS["savings"] if unit_diff >= 0 else COLORS["premium"]
+    badge_bg = "#DCFCE7" if unit_diff >= 0 else "#FEE2E2"
     diff_text = (
-        f"PV+BESS vs. Diesel BPP: ${unit_diff:+.4f}/kWh ({unit_diff_pct:+.1f}%)\n"
-        f"Hybrid vs. Diesel-Only: ${hyb_sav_kwh:+.4f}/kWh ({hyb_sav_pct:+.1f}%)  |  Saves ${hyb_sav_yr:,.0f}/yr"
+        f"PV+BESS vs. Measured PLTD BPP: ${unit_diff:+.4f}/kWh ({unit_diff_pct:+.1f}%) | ${disp_sav_yr:+,.0f}/yr\n"
+        f"Hybrid Blended vs. PLTD BPP: ${hyb_sav_kwh:+.4f}/kWh ({hyb_sav_pct:+.1f}%)"
     )
     ax5b.text(
         0.50, 0.97,
@@ -616,10 +616,13 @@ def main():
     args = parser.parse_args()
 
     df = pd.read_csv(args.csv)
-    if "grid_price_usd_kwh" not in df.columns and args.profiles_csv and os.path.exists(args.profiles_csv):
-        prof = load_profiles_from_csv(args.profiles_csv)
-        if len(prof) == len(df):
-            df["grid_price_usd_kwh"] = prof["grid_price_usd_kwh"].to_numpy()
+    if args.profiles_csv and os.path.exists(args.profiles_csv):
+        prof = load_profiles_from_csv(args.profiles_csv, dt_hours=args.dt)
+        if len(prof) >= len(df):
+            if "grid_price_usd_kwh" not in df.columns:
+                df["grid_price_usd_kwh"] = prof["grid_price_usd_kwh"].iloc[:len(df)].to_numpy()
+            if "total_mdu_pancabina_kw" not in df.columns and "total_mdu_pancabina_kw" in prof.columns:
+                df["total_mdu_pancabina_kw"] = prof["total_mdu_pancabina_kw"].iloc[:len(df)].to_numpy()
 
     if args.econ_csv and os.path.exists(args.econ_csv):
         econ_params = load_economics_from_csv(args.econ_csv)

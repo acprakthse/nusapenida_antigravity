@@ -213,13 +213,16 @@ def load_profiles_from_csv(
     load_col: str = "load_kw",
     pv_col: str = "pv_avail_kw",
     price_col: str = "grid_price_usd_kwh",
-    default_grid_price: float = 0.125,
+    measured_pltd_col: str = "total_mdu_pancabina_kw",
+    default_grid_price: float = 0.2488,
     dt_hours: float = 0.5,
 ) -> pd.DataFrame:
     """
-    Load user-provided load, Solar PV generation, and electricity price profiles from a CSV file.
+    Load user-provided load, Solar PV generation, electricity price (BPP PLTD),
+    and optional measured PLTD baseline (`total_mdu_pancabina_kw`) from a CSV file.
     Required columns: `load_col` (kW) and `pv_col` (kW).
-    Optional columns: `hour` (numeric hours or datetime string) and `price_col` (USD/kWh).
+    Optional columns: `hour` (numeric hours or datetime string), `price_col` (USD/kWh),
+    and `measured_pltd_col` (kW, real measured PLTD generation).
     Negative PV values (nighttime inverter standby losses) are clipped to 0.0 kW.
     """
     df = pd.read_csv(csv_path)
@@ -252,5 +255,15 @@ def load_profiles_from_csv(
         )
     else:
         out["grid_price_usd_kwh"] = float(default_grid_price)
+
+    if measured_pltd_col in df.columns:
+        out["total_mdu_pancabina_kw"] = (
+            pd.to_numeric(df[measured_pltd_col], errors="coerce")
+            .ffill()
+            .bfill()
+            .fillna(0.0)
+            .clip(lower=0.0)
+            .astype(float)
+        )
 
     return out
